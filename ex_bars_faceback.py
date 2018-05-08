@@ -1,5 +1,5 @@
 import itertools
-import time
+from pathlib import Path
 
 import matplotlib.pyplot as plt
 
@@ -17,14 +17,14 @@ from kindling.distributions import (
 )
 from kindling.utils import Lambda, NormalPriorTheta, MetaOptimizer
 
-from bars_data import sample_many_one_bar_images
+from bars_data import sample_many_one_bar_images, sample_many_bars_images
 from faceback import SparseProductOfExpertsVAE
 from utils import no_ticks
 
 
 torch.manual_seed(0)
 
-class FacebackBars(object):
+class BarsFaceback(object):
   """Runs the sparse PoE faceback framework on the bars data with exactly one
   bar present per image."""
   def __init__(
@@ -35,7 +35,7 @@ class FacebackBars(object):
       dim_z,
       lam,
       sparsity_matrix_lr,
-      results_dir=None
+      base_results_dir=None
   ):
     self.img_size = img_size
     self.num_samples = num_samples
@@ -43,7 +43,7 @@ class FacebackBars(object):
     self.dim_z = dim_z
     self.lam = lam
     self.sparsity_matrix_lr = sparsity_matrix_lr
-    self.results_dir = results_dir
+    self.base_results_dir = base_results_dir
 
     # Sample the training data and set up a DataLoader
     self.train_data = self.sample_data(self.num_samples)
@@ -95,13 +95,18 @@ class FacebackBars(object):
     # self.sparsity_fig, self.sparsity_ax = None, None
     # self.sparsity_colorbar = None
 
-    # self._init_results_dir()
+    if self.base_results_dir is not None:
+      self._init_results_dir()
 
   def sample_data(self, num_samples, noise_stddev=0.01):
     """Sample a bars image. Produces a Tensor of shape [num_samples,
     self.img_size, self.img_size]."""
+    # return (
+    #   sample_many_one_bar_images(num_samples, self.img_size) +
+    #   noise_stddev * torch.randn(num_samples, self.img_size, self.img_size)
+    # )
     return (
-      sample_many_one_bar_images(num_samples, self.img_size) +
+      sample_many_bars_images(num_samples, self.img_size, 0.5 * torch.ones(self.img_size), torch.zeros(self.img_size)) +
       noise_stddev * torch.randn(num_samples, self.img_size, self.img_size)
     )
 
@@ -123,7 +128,7 @@ class FacebackBars(object):
       )
     )
 
-  def train(self, num_epochs, show_viz=True):
+  def train(self, num_epochs):
     for self.epoch in itertools.islice(self.epoch_counter, num_epochs):
       for batch_idx, (data, _) in enumerate(self.train_loader):
         # The final batch may not have the same size as `batch_size`.
@@ -160,17 +165,19 @@ class FacebackBars(object):
         print(f'    L1               : {logprob_L1.data[0]}')
         print(f'  test log lik.      : {test_ll}')
 
-      if show_viz:
+      if self.base_results_dir is not None:
         # This has a good mix when img_size = 4
-        self.viz_reconstruction(123456)
-        self.viz_elbo()
-        self.viz_sparsity()
+        fig = self.viz_reconstruction(123456)
+        plt.savefig(self.results_dir_reconstructions / f'epoch{self.epoch}.pdf')
+        plt.close(fig)
 
-        # see https://stackoverflow.com/questions/12670101/matplotlib-ion-function-fails-to-be-interactive?utm_medium=organic&utm_source=google_rich_qa&utm_campaign=google_rich_qa
-        # plt.draw_all()
-        # plt.show(block=False)
-        # plt.pause(0.0001)
-        # time.sleep(1)
+        fig = self.viz_elbo()
+        plt.savefig(self.results_dir_elbo / f'epoch{self.epoch}.pdf')
+        plt.close(fig)
+
+        fig = self.viz_sparsity()
+        plt.savefig(self.results_dir_sparsity_matrix / f'epoch{self.epoch}.pdf')
+        plt.close(fig)
 
   def test_loglik(self):
     Xs = [Variable(self.test_data[:, i]) for i in range(self.img_size)]
@@ -179,35 +186,23 @@ class FacebackBars(object):
     return self.vae.log_likelihood(Xs, group_mask, q_z.sample())
 
   def viz_elbo(self):
-    if self.elbo_plot_fig is None or self.elbo_plot_ax is None:
-      self.elbo_plot_fig, self.elbo_plot_ax = plt.subplots()
-      self.elbo_plot_ax.set_xlabel('iteration')
-      self.elbo_plot_ax.set_ylabel('ELBO')
-
-    self.elbo_plot_ax.clear()
-    self.elbo_plot_ax.plot(self.elbo_per_iter)
+    fig = plt.figure()
+    plt.plot(self.elbo_per_iter)
+    plt.xlabel('iteration')
+    plt.ylabel('ELBO')
+    return fig
 
   def viz_sparsity(self):
     """Visualize the sparisty matrix associating latent components with
     groups."""
-    if self.sparsity_fig is None or self.sparsity_ax is None:
-      self.sparsity_fig, self.sparsity_ax = plt.subplots()
-      self.sparsity_ax.set_xlabel('latent components')
-      self.sparsity_ax.set_ylabel('groups')
-
-    self.sparsity_ax.clear()
-    if self.sparsity_colorbar is not None:
-      self.sparsity_colorbar.remove()
-    im = self.sparsity_ax.imshow(self.vae.sparsity_matrix.data.numpy())
-    self.sparsity_colorbar = self.sparsity_fig.colorbar(im)
+    fig = plt.figure()
+    plt.imshow(self.vae.sparsity_matrix.data.numpy())
+    plt.colorbar()
+    plt.xlabel('latent components')
+    plt.ylabel('groups')
+    return fig
 
   def viz_reconstruction(self, plot_seed):
-    if self.reconstruction_fig is None or self.reconstruction_ax is None:
-      self.reconstruction_fig, self.reconstruction_ax = plt.subplots(2, 8, figsize=(12, 4))
-      self.reconstruction_fig.tight_layout()
-      self.reconstruction_ax[0, 0].set_ylabel('true')
-      self.reconstruction_ax[1, 0].set_ylabel('reconst')
-
     pytorch_rng_state = torch.get_rng_state()
     torch.manual_seed(plot_seed)
 
@@ -223,31 +218,49 @@ class FacebackBars(object):
       inference_group_mask
     )
     reconstr = info['reconstructed']
-    reconstr_tensor = torch.stack(
-      [reconstr[i].mu.data for i in range(self.img_size)],
-      dim=1
-    )
+    reconstr_tensor = torch.stack([reconstr[i].mu.data for i in range(self.img_size)], dim=1)
 
+    fig, ax = plt.subplots(2, 8, figsize=(12, 4))
     for i in range(8):
-      self.reconstruction_ax[0, i].clear()
-      self.reconstruction_ax[1, i].clear()
+      ax[0, i].imshow(train_sample[i].numpy(), vmin=0, vmax=1)
+      ax[1, i].imshow(reconstr_tensor[i].numpy(), vmin=0, vmax=1)
 
-      self.reconstruction_ax[0, i].imshow(train_sample[i].numpy(), vmin=0, vmax=1)
-      self.reconstruction_ax[1, i].imshow(reconstr_tensor[i].numpy(), vmin=0, vmax=1)
+      no_ticks(ax[0, i])
+      no_ticks(ax[1, i])
 
-      no_ticks(self.reconstruction_ax[0, i])
-      no_ticks(self.reconstruction_ax[1, i])
+    ax[0, 0].set_ylabel('true')
+    ax[1, 0].set_ylabel('reconst')
 
-    self.reconstruction_fig.suptitle(f'Epoch {self.epoch}')
+    plt.tight_layout()
+    plt.suptitle(f'Epoch {self.epoch}')
+
     torch.set_rng_state(pytorch_rng_state)
+    return fig
+
+  def results_dir(self):
+    params = ['img_size', 'num_samples', 'batch_size', 'dim_z', 'lam', 'sparsity_matrix_lr']
+    poop = ' '.join([f'{p}={getattr(self, p)}' for p in params])
+    return self.base_results_dir / f'bars {poop}'
+
+  def _init_results_dir(self):
+    self.results_dir_elbo = self.results_dir() / 'elbo_plot'
+    self.results_dir_sparsity_matrix = self.results_dir() / 'sparsity_matrix'
+    self.results_dir_reconstructions = self.results_dir() / 'reconstructions'
+
+    # The results_dir should be unique
+    self.results_dir().mkdir(exist_ok=False)
+    self.results_dir_elbo.mkdir(exist_ok=False)
+    self.results_dir_sparsity_matrix.mkdir(exist_ok=False)
+    self.results_dir_reconstructions.mkdir(exist_ok=False)
 
 if __name__ == '__main__':
-  experiment = FacebackBars(
+  experiment = BarsFaceback(
     img_size=4,
     num_samples=10000,
     batch_size=32,
     dim_z=8,
-    lam=1,
-    sparsity_matrix_lr=1e-4
+    lam=0.1,
+    sparsity_matrix_lr=1e-4,
+    base_results_dir=Path('results/')
   )
-  experiment.train(10, show_viz=True)
+  experiment.train(100)
