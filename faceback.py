@@ -266,7 +266,8 @@ class SparseProductOfExpertsVAE(object):
 
     self.sparsity_matrix = Variable(
       # (1.0 / math.sqrt(self.dim_z)) * torch.randn(self.num_groups, self.dim_z),
-      torch.ones(self.num_groups, self.dim_z),
+      # torch.ones(self.num_groups, self.dim_z),
+      torch.eye(2), #### XXX
       requires_grad=True
     )
 
@@ -362,7 +363,148 @@ class SparseProductOfExpertsVAE(object):
     return {
       'q_z': q_z,
       'z_sample': z_sample,
-      'reconstructed': [gen(z_sample) for gen in self.generative_nets]
+      'reconstructed': [
+        gen(z_sample * self.sparsity_matrix[ix].view(1, -1))
+        for ix, gen in enumerate(self.generative_nets)
+      ]
+    }
+
+  # def parameters(self):
+  #   return itertools.chain(
+  #     *[net.parameters() for net in self.inference_nets],
+  #     *[net.parameters() for net in self.generative_nets],
+  #     [self.sparsity_matrix]
+  #   )
+
+class OneSidedFacebackoiVAE(object):
+  """A product of experts (PoE) style posterior approximation but with sparsity
+  only on the generative side."""
+  def __init__(
+      self,
+      inference_nets,
+      generative_nets,
+      prior_z,
+      prior_theta,
+      lam
+  ):
+    """
+    Arguments
+    =========
+    inference_nets : list of Normal_MeanPrecisionNet
+    generative_nets : list of DistributionNets
+    prior_z : Normal distribution of shape [1, dim_z]
+    """
+    self.inference_nets = inference_nets
+    self.generative_nets = generative_nets
+    self.prior_z = prior_z
+    self.prior_theta = prior_theta
+    self.lam = lam
+
+    self.num_groups = len(self.generative_nets)
+    self.dim_z = self.prior_z.size(1)
+
+    self.sparsity_matrix = Variable(
+      # (1.0 / math.sqrt(self.dim_z)) * torch.randn(self.num_groups, self.dim_z),
+      torch.ones(self.num_groups, self.dim_z),
+      requires_grad=True
+    )
+
+  def elbo(self, Xs, group_mask, inference_group_mask, mc_samples=1):
+    batch_size = Xs[0].size(0)
+
+    # [batch_size, dim_z]
+    q_z = self.approx_posterior(Xs, inference_group_mask)
+
+    # KL divergence is additive across independent joint distributions, so this
+    # works appropriately. This is where the normal constraints come from.
+    z_kl = KL_Normals(q_z, self.prior_z.expand_as(q_z)) / batch_size
+
+    # [batch_size * mc_samples, dim_z]
+    z_sample = torch.cat([q_z.sample() for _ in range(mc_samples)], dim=0)
+    loglik_term = self.log_likelihood(Xs, group_mask, z_sample, mc_samples)
+
+    logprob_theta = sum(self.prior_theta.logprob(net) for net in self.generative_nets)
+    logprob_L1 = -self.lam * torch.sum(torch.abs(self.sparsity_matrix))
+
+    # `loss` is the differentiable part of the ELBO. We negate it in order to do
+    # descent. `elbo` is the complete ELBO including the L1 sparsity prior.
+    loss = -1 * (-z_kl + loglik_term + logprob_theta)
+    elbo = -loss + logprob_L1
+
+    return {
+      'logprob_theta': logprob_theta,
+      'logprob_L1': logprob_L1,
+      'loss': loss,
+      'elbo': elbo,
+      'z_kl': z_kl,
+      'reconstruction_log_likelihood': loglik_term,
+      'q_z': q_z,
+      'z_sample': z_sample
+    }
+
+  def approx_posterior(self, Xs, inference_group_mask):
+    """Run the inference net to evaluate q(z | x), the approximate posterior."""
+    q_zs = [q(X) for q, X in zip(self.inference_nets, Xs)]
+
+    # Here we also have to add in the precision from the prior. The sparsity
+    # matrix mask is squared in order to prevent any negative values.
+    precision = self.prior_z.sigma.pow(-2) + sum(
+      q_z.precision * inference_group_mask[:, i].contiguous().view(-1, 1)
+      for i, q_z in enumerate(q_zs)
+    )
+
+    mu = precision.pow(-1) * sum(
+      q_z.precision * q_z.mu * inference_group_mask[:, i].contiguous().view(-1, 1)
+      for i, q_z in enumerate(q_zs)
+    )
+
+    return Normal(mu, precision.pow(-0.5))
+
+  def log_likelihood(self, Xs, group_mask, z_sample, mc_samples=1):
+    batch_size = Xs[0].size(0)
+
+    # List of [batch_size * mc_samples, dim_group_x]
+    Xsrep = [Variable(X.data.repeat(mc_samples, 1)) for X in Xs]
+
+    # Evaluating the log likelihood always happens on all available data. Sum
+    # the likelihoods over all of the available groups.
+    return sum(
+      # Sum the likelihoods over every observed dimension in a group. Then
+      # mask based on whether or not this group is present in each batch
+      # item.
+      torch.sum(
+        # Multiply the z_sample with the corresponding sparsity diagonal matrix.
+        torch.sum(g(z_sample * self.sparsity_matrix[ix].view(1, -1)).logprob_independent(X), dim=1) * group_mask[:, ix]
+      )
+      for ix, (g, X) in enumerate(zip(self.generative_nets, Xsrep))
+    ) / mc_samples / batch_size
+
+  def proximal_step(self, t):
+    norms = torch.abs(self.sparsity_matrix.data)
+    self.sparsity_matrix.data.sign_()
+    self.sparsity_matrix.data.mul_(torch.clamp(norms - t, min=0))
+
+  def reconstruct(self, Xs, inference_group_mask):
+    """
+    Arguments
+    =========
+    Xs : list of Variables of shape [batch_size, dim_x] where dim_x can vary.
+    inference_group_mask : binary Variable of shape [batch_size, num_groups]
+
+    Returns
+    =======
+    list of Variables of shape [batch_size, dim_x] where dim_x can vary.
+    """
+    q_z = self.approx_posterior(Xs, inference_group_mask)
+    z_sample = q_z.sample()
+
+    return {
+      'q_z': q_z,
+      'z_sample': z_sample,
+      'reconstructed': [
+        gen(z_sample * self.sparsity_matrix[ix].view(1, -1))
+        for ix, gen in enumerate(self.generative_nets)
+      ]
     }
 
   # def parameters(self):

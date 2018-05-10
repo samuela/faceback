@@ -37,7 +37,7 @@ skeleton = mocap_data.load_skeleton(subject)
 dim_z = 32
 batch_size = 64
 lam = 0
-sparsity_matrix_lr = 0
+sparsity_matrix_lr = 1e-3
 
 joint_order = [
   'root',

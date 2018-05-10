@@ -15,14 +15,12 @@ from kindling.distributions import (
   NormalNet,
   Normal_MeanPrecisionNet
 )
-from kindling.utils import Lambda, NormalPriorTheta, MetaOptimizer
+from kindling.utils import Lambda, NormalPriorTheta, MetaOptimizer, NoPriorTheta
 
 from bars_data import sample_many_one_bar_images, sample_many_bars_images
-from faceback import SparseProductOfExpertsVAE
+from faceback import SparseProductOfExpertsVAE, OneSidedFacebackoiVAE
 from utils import no_ticks
 
-
-torch.manual_seed(0)
 
 class BarsFaceback(object):
   """Runs the sparse PoE faceback framework on the bars data with exactly one
@@ -35,6 +33,7 @@ class BarsFaceback(object):
       dim_z,
       lam,
       sparsity_matrix_lr,
+      initial_baseline_precision,
       base_results_dir=None
   ):
     self.img_size = img_size
@@ -43,6 +42,7 @@ class BarsFaceback(object):
     self.dim_z = dim_z
     self.lam = lam
     self.sparsity_matrix_lr = sparsity_matrix_lr
+    self.initial_baseline_precision = initial_baseline_precision
     self.base_results_dir = base_results_dir
 
     # Sample the training data and set up a DataLoader
@@ -66,14 +66,19 @@ class BarsFaceback(object):
       Variable(torch.zeros(1, dim_z)),
       Variable(torch.ones(1, dim_z))
     )
-    self.baseline_precision = Variable(100 * torch.ones(1), requires_grad=True)
+    self.baseline_precision = Variable(
+      self.initial_baseline_precision * torch.ones(1),
+      requires_grad=True
+    )
 
     dim_xs = [self.img_size] * self.img_size
-    self.vae = SparseProductOfExpertsVAE(
+    # self.vae = SparseProductOfExpertsVAE(
+    self.vae = OneSidedFacebackoiVAE(
       inference_nets=[self.make_inference_net(dim_x) for dim_x in dim_xs],
       generative_nets=[self.make_generative_net(dim_x) for dim_x in dim_xs],
       prior_z=self.prior_z,
-      prior_theta=NormalPriorTheta(sigma=1),
+      prior_theta=NormalPriorTheta(sigma=1e3),
+      # prior_theta=NoPriorTheta(),
       lam=lam
     )
 
@@ -117,6 +122,7 @@ class BarsFaceback(object):
         torch.nn.Linear(self.dim_z, dim_x),
         Lambda(lambda x: torch.exp(0.5 * x))
       )
+      # Lambda(lambda x: Variable(torch.ones(x.size(0), dim_x)))
     )
 
   def make_inference_net(self, dim_x):
@@ -164,10 +170,12 @@ class BarsFaceback(object):
         print(f'    log p(theta)     : {logprob_theta.data[0]}')
         print(f'    L1               : {logprob_L1.data[0]}')
         print(f'  test log lik.      : {test_ll}')
+        print(self.baseline_precision.data[0])
+        # print(self.vae.generative_nets[0].param_nets[1][0].bias.data)
 
-      if self.base_results_dir is not None:
+      if self.base_results_dir is not None or True:
         # This has a good mix when img_size = 4
-        fig = self.viz_reconstruction(123456)
+        fig = self.viz_reconstruction(12)
         plt.savefig(self.results_dir_reconstructions / f'epoch{self.epoch}.pdf')
         plt.close(fig)
 
@@ -178,6 +186,8 @@ class BarsFaceback(object):
         fig = self.viz_sparsity()
         plt.savefig(self.results_dir_sparsity_matrix / f'epoch{self.epoch}.pdf')
         plt.close(fig)
+
+        # plt.show()
 
   def test_loglik(self):
     Xs = [Variable(self.test_data[:, i]) for i in range(self.img_size)]
@@ -238,9 +248,9 @@ class BarsFaceback(object):
     return fig
 
   def results_dir(self):
-    params = ['img_size', 'num_samples', 'batch_size', 'dim_z', 'lam', 'sparsity_matrix_lr']
+    params = ['img_size', 'num_samples', 'batch_size', 'dim_z', 'lam', 'sparsity_matrix_lr', 'initial_baseline_precision']
     poop = ' '.join([f'{p}={getattr(self, p)}' for p in params])
-    return self.base_results_dir / f'bars {poop}'
+    return self.base_results_dir / f'faceback-oivae bars {poop}'
 
   def _init_results_dir(self):
     self.results_dir_elbo = self.results_dir() / 'elbo_plot'
@@ -254,13 +264,16 @@ class BarsFaceback(object):
     self.results_dir_reconstructions.mkdir(exist_ok=False)
 
 if __name__ == '__main__':
+  torch.manual_seed(0)
+
   experiment = BarsFaceback(
-    img_size=4,
+    img_size=2,
     num_samples=10000,
     batch_size=32,
-    dim_z=8,
-    lam=0.1,
-    sparsity_matrix_lr=1e-4,
+    dim_z=2,
+    lam=0,
+    sparsity_matrix_lr=1e-3,
+    initial_baseline_precision=100,
     base_results_dir=Path('results/')
   )
   experiment.train(100)
