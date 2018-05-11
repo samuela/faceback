@@ -1,5 +1,6 @@
 import itertools
 from pathlib import Path
+import pickle
 
 import matplotlib.pyplot as plt
 
@@ -18,13 +19,12 @@ from kindling.distributions import (
 from kindling.utils import Lambda, NormalPriorTheta, MetaOptimizer, NoPriorTheta
 
 from bars_data import sample_many_one_bar_images, sample_many_bars_images
-from faceback import SparseProductOfExpertsVAE, OneSidedFacebackoiVAE
-from utils import no_ticks
+from faceback import SparseProductOfExpertsVAE, OneSidedFacebackoiVAE, GroupSparseFacebackoiVAE, PoopInferenceNet, PoopGenerativeNet
+from utils import no_ticks, sample_random_mask
 
 
-class BarsFaceback(object):
-  """Runs the sparse PoE faceback framework on the bars data with exactly one
-  bar present per image."""
+class BarsFacebackGroupSparse(object):
+  """Runs the sparse PoE faceback framework on the bars data with the split group sparsity prior."""
   def __init__(
       self,
       img_size,
@@ -34,6 +34,9 @@ class BarsFaceback(object):
       lam,
       sparsity_matrix_lr,
       initial_baseline_precision,
+      inference_net_output_dim,
+      generative_net_input_dim,
+      noise_stddev,
       base_results_dir=None
   ):
     self.img_size = img_size
@@ -43,6 +46,9 @@ class BarsFaceback(object):
     self.lam = lam
     self.sparsity_matrix_lr = sparsity_matrix_lr
     self.initial_baseline_precision = initial_baseline_precision
+    self.inference_net_output_dim = inference_net_output_dim
+    self.generative_net_input_dim = generative_net_input_dim
+    self.noise_stddev = noise_stddev
     self.base_results_dir = base_results_dir
 
     # Sample the training data and set up a DataLoader
@@ -66,33 +72,44 @@ class BarsFaceback(object):
       Variable(torch.zeros(1, dim_z)),
       Variable(torch.ones(1, dim_z))
     )
-    self.baseline_precision = Variable(
-      self.initial_baseline_precision * torch.ones(1),
-      requires_grad=True
-    )
 
     dim_xs = [self.img_size] * self.img_size
-    # self.vae = SparseProductOfExpertsVAE(
-    self.vae = OneSidedFacebackoiVAE(
-      inference_nets=[self.make_inference_net(dim_x) for dim_x in dim_xs],
-      generative_nets=[self.make_generative_net(dim_x) for dim_x in dim_xs],
+    self.inference_net = PoopInferenceNet(
+      almost_inference_nets=[self.make_almost_inference_net(dim_x) for dim_x in dim_xs],
+      net_output_dim=self.inference_net_output_dim,
+      prior_z=self.prior_z,
+      initial_baseline_precision=self.initial_baseline_precision
+    )
+    self.generative_net = PoopGenerativeNet(
+      almost_generative_nets=[self.make_almost_generative_net(dim_x) for dim_x in dim_xs],
+      net_input_dim=self.generative_net_input_dim,
+      dim_z=self.dim_z
+    )
+    self.vae = GroupSparseFacebackoiVAE(
+      inference_net=self.inference_net,
+      generative_net=self.generative_net,
       prior_z=self.prior_z,
       prior_theta=NormalPriorTheta(sigma=1e3),
-      # prior_theta=NoPriorTheta(),
       lam=self.lam
     )
 
+    # group lasso version
     self.optimizer = MetaOptimizer([
+      # Inference parameters
       torch.optim.Adam(
-        set(p for net in self.vae.inference_nets for p in net.parameters()),
+        set(p for net in self.inference_net.almost_inference_nets for p in net.parameters()),
         lr=1e-3
       ),
+      torch.optim.Adam([self.inference_net.mu_layers], lr=1e-3),
+      torch.optim.SGD([self.inference_net.precision_layers], lr=self.sparsity_matrix_lr),
+      torch.optim.Adam([self.inference_net.baseline_precision], lr=1e-3),
+
+      # Generative parameters
       torch.optim.Adam(
-        set(p for net in self.vae.generative_nets for p in net.parameters()),
+        set(p for net in self.generative_net.almost_generative_nets for p in net.parameters()),
         lr=1e-3
       ),
-      torch.optim.Adam([self.baseline_precision], lr=1e-3),
-      torch.optim.SGD([self.vae.sparsity_matrix], lr=self.sparsity_matrix_lr)
+      torch.optim.SGD([self.generative_net.connectivity_matrices], lr=self.sparsity_matrix_lr)
     ])
 
     # self.elbo_plot_fig, self.elbo_plot_ax = None, None
@@ -103,7 +120,7 @@ class BarsFaceback(object):
     if self.base_results_dir is not None:
       self._init_results_dir()
 
-  def sample_data(self, num_samples, noise_stddev=0.01):
+  def sample_data(self, num_samples):
     """Sample a bars image. Produces a Tensor of shape [num_samples,
     self.img_size, self.img_size]."""
     # return (
@@ -112,26 +129,22 @@ class BarsFaceback(object):
     # )
     return (
       sample_many_bars_images(num_samples, self.img_size, 0.5 * torch.ones(self.img_size), torch.zeros(self.img_size)) +
-      noise_stddev * torch.randn(num_samples, self.img_size, self.img_size)
+      self.noise_stddev * torch.randn(num_samples, self.img_size, self.img_size)
     )
 
-  def make_generative_net(self, dim_x):
+  def make_almost_generative_net(self, dim_x):
     return NormalNet(
-      torch.nn.Linear(self.dim_z, dim_x),
+      torch.nn.Linear(self.generative_net_input_dim, dim_x),
       torch.nn.Sequential(
-        torch.nn.Linear(self.dim_z, dim_x),
+        torch.nn.Linear(self.generative_net_input_dim, dim_x),
         Lambda(lambda x: torch.exp(0.5 * x))
       )
-      # Lambda(lambda x: Variable(torch.ones(x.size(0), dim_x)))
     )
 
-  def make_inference_net(self, dim_x):
-    return Normal_MeanPrecisionNet(
-      torch.nn.Linear(dim_x, self.dim_z),
-      torch.nn.Sequential(
-        torch.nn.Linear(dim_x, self.dim_z),
-        Lambda(lambda x: torch.exp(x) + self.baseline_precision)
-      )
+  def make_almost_inference_net(self, dim_x):
+    return torch.nn.Sequential(
+      torch.nn.Linear(dim_x, self.inference_net_output_dim),
+      torch.nn.ReLU()
     )
 
   def train(self, num_epochs):
@@ -150,6 +163,7 @@ class BarsFaceback(object):
           )
         )
         elbo = info['elbo']
+        loss = info['loss']
         z_kl = info['z_kl']
         reconstruction_log_likelihood = info['reconstruction_log_likelihood']
         logprob_theta = info['logprob_theta']
@@ -157,7 +171,7 @@ class BarsFaceback(object):
         test_ll = self.test_loglik().data[0]
 
         self.optimizer.zero_grad()
-        (-elbo).backward()
+        loss.backward()
         self.optimizer.step()
         self.vae.proximal_step(self.sparsity_matrix_lr * self.lam)
 
@@ -170,10 +184,10 @@ class BarsFaceback(object):
         print(f'    log p(theta)     : {logprob_theta.data[0]}')
         print(f'    L1               : {logprob_L1.data[0]}')
         print(f'  test log lik.      : {test_ll}')
-        print(self.baseline_precision.data[0])
+        print(self.inference_net.baseline_precision.data[0])
         # print(self.vae.generative_nets[0].param_nets[1][0].bias.data)
 
-      if self.base_results_dir is not None or True:
+      if self.base_results_dir is not None:
         # This has a good mix when img_size = 4
         fig = self.viz_reconstruction(12)
         plt.savefig(self.results_dir_reconstructions / f'epoch{self.epoch}.pdf')
@@ -187,12 +201,17 @@ class BarsFaceback(object):
         plt.savefig(self.results_dir_sparsity_matrix / f'epoch{self.epoch}.pdf')
         plt.close(fig)
 
-        # plt.show()
+        pickle.dump(self, open(self.results_dir_pickles / f'epoch{self.epoch}.p', 'wb'))
+      else:
+        self.viz_reconstruction(12)
+        self.viz_elbo()
+        self.viz_sparsity()
+        plt.show()
 
   def test_loglik(self):
     Xs = [Variable(self.test_data[:, i]) for i in range(self.img_size)]
     group_mask = Variable(torch.ones(self.test_data.size(0), self.img_size))
-    q_z = self.vae.approx_posterior(Xs, group_mask)
+    q_z = self.inference_net(Xs, group_mask)
     return self.vae.log_likelihood(Xs, group_mask, q_z.sample())
 
   def viz_elbo(self):
@@ -206,7 +225,11 @@ class BarsFaceback(object):
     """Visualize the sparisty matrix associating latent components with
     groups."""
     fig = plt.figure()
-    plt.imshow(self.vae.sparsity_matrix.data.numpy())
+    group_norms = torch.sqrt(
+      torch.sum(self.inference_net.precision_layers.data.pow(2), dim=1) +
+      torch.sum(self.generative_net.connectivity_matrices.data.pow(2), dim=2)
+    )
+    plt.imshow(group_norms.numpy())
     plt.colorbar()
     plt.xlabel('latent components')
     plt.ylabel('groups')
@@ -248,32 +271,48 @@ class BarsFaceback(object):
     return fig
 
   def results_dir(self):
-    params = ['img_size', 'num_samples', 'batch_size', 'dim_z', 'lam', 'sparsity_matrix_lr', 'initial_baseline_precision']
+    params = [
+      'img_size',
+      'num_samples',
+      'batch_size',
+      'dim_z',
+      'lam',
+      'sparsity_matrix_lr',
+      'initial_baseline_precision',
+      'inference_net_output_dim',
+      'generative_net_input_dim',
+      'noise_stddev'
+    ]
     poop = ' '.join([f'{p}={getattr(self, p)}' for p in params])
-    return self.base_results_dir / f'group-sparse bars {poop}'
+    return self.base_results_dir / f'randn-init group-sparse-bars {poop}'
 
   def _init_results_dir(self):
     self.results_dir_elbo = self.results_dir() / 'elbo_plot'
     self.results_dir_sparsity_matrix = self.results_dir() / 'sparsity_matrix'
     self.results_dir_reconstructions = self.results_dir() / 'reconstructions'
+    self.results_dir_pickles = self.results_dir() / 'pickles'
 
     # The results_dir should be unique
     self.results_dir().mkdir(exist_ok=False)
     self.results_dir_elbo.mkdir(exist_ok=False)
     self.results_dir_sparsity_matrix.mkdir(exist_ok=False)
     self.results_dir_reconstructions.mkdir(exist_ok=False)
+    self.results_dir_pickles.mkdir(exist_ok=False)
 
 if __name__ == '__main__':
   torch.manual_seed(0)
 
-  experiment = BarsFaceback(
+  experiment = BarsFacebackGroupSparse(
     img_size=2,
     num_samples=10000,
     batch_size=32,
     dim_z=2,
-    lam=0,
+    lam=1,
     sparsity_matrix_lr=1e-3,
     initial_baseline_precision=100,
+    inference_net_output_dim=8,
+    generative_net_input_dim=8,
+    noise_stddev=0.05,
     base_results_dir=Path('results/')
   )
-  experiment.train(100)
+  experiment.train(250)
