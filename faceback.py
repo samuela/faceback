@@ -726,6 +726,13 @@ class FacebackVAE(object):
       'reconstructed': self.generative_net(z_sample)
     }
 
+  def sparsity_matrix(self):
+    """Construct the sparsity matrix between groups and latent components."""
+    return torch.sqrt(
+      torch.sum(self.inference_net.precision_layers.pow(2), dim=1) +
+      torch.sum(self.generative_net.connectivity_matrices.pow(2), dim=2)
+    )
+
 ################################################################################
 # These are mixture weighting networks for the mixture model versions.
 class VotingMixtureWeightNet(object):

@@ -254,11 +254,7 @@ class BarsFaceback(object):
     """Visualize the sparisty matrix associating latent components with
     groups."""
     fig = plt.figure()
-    group_norms = torch.sqrt(
-      torch.sum(self.inference_net.precision_layers.data.pow(2), dim=1) +
-      torch.sum(self.generative_net.connectivity_matrices.data.pow(2), dim=2)
-    )
-    plt.imshow(group_norms.numpy())
+    plt.imshow(self.vae.sparsity_matrix().data.numpy())
     plt.colorbar()
     plt.xlabel('latent components')
     plt.ylabel('groups')
