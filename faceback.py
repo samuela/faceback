@@ -1,5 +1,7 @@
+"""Various models for solving VAEs with missing data."""
+
 import itertools
-import math
+# import math
 
 import torch
 from torch.autograd import Variable
@@ -9,13 +11,14 @@ from kindling.distributions import Normal
 from kindling.utils import KL_Normals, KL_Normals_independent
 
 
-class FacebackVAE(object):
+class OldFacebackVAE(object):
   """An implementation of a Faceback variational autoenoder. Note that this
   particular implementation requires that the prior over z and the approximate
   posterior q(z | x) must both be diagonal normal distributions.
 
   This is the mixture of Gaussians model.
-  """
+
+  This model is outdated and may not work."""
 
   def __init__(
       self,
@@ -147,7 +150,7 @@ class FacebackVAE(object):
       self.mixture_weight_net.parameters()
     )
 
-class FacebackAveragingVAE(object):
+class AveragingVAE(object):
   """This currently assumes that all of the inference net posteriors are Normal
   distributions."""
 
@@ -240,7 +243,12 @@ class FacebackAveragingVAE(object):
     )
 
 class SparseProductOfExpertsVAE(object):
-  """A product of experts (PoE) style posterior approximation with sparsity."""
+  """A product of experts (PoE) style posterior approximation with sparsity.
+  Sparsity here is done with standard L1 norms on diagonal matrices instead of
+  group sparsity on. Sparsity is tied between the inference and generative
+  models.
+
+  This model doesn't work well and is not used."""
   def __init__(
       self,
       inference_nets,
@@ -267,8 +275,8 @@ class SparseProductOfExpertsVAE(object):
 
     self.sparsity_matrix = Variable(
       # (1.0 / math.sqrt(self.dim_z)) * torch.randn(self.num_groups, self.dim_z),
-      # torch.ones(self.num_groups, self.dim_z),
-      torch.eye(2), #### XXX
+      torch.ones(self.num_groups, self.dim_z),
+      # torch.eye(2), #### XXX
       requires_grad=True
     )
 
@@ -379,7 +387,10 @@ class SparseProductOfExpertsVAE(object):
 
 class OneSidedFacebackoiVAE(object):
   """A product of experts (PoE) style posterior approximation but with sparsity
-  only on the generative side."""
+  only on the generative side. This should be more or less the same as
+  `SparseProductOfExpertsVAE` but with sparsity only on the generative side.
+  Generally outperforms putting sparsity on both sides."""
+
   def __init__(
       self,
       inference_nets,
@@ -515,7 +526,9 @@ class OneSidedFacebackoiVAE(object):
   #     [self.sparsity_matrix]
   #   )
 
-class PoopInferenceNet(object):
+################################################################################
+# Actual Faceback model
+class FacebackInferenceNet(object):
   def __init__(
       self,
       almost_inference_nets,
@@ -573,9 +586,6 @@ class PoopInferenceNet(object):
 
     return Normal(mu, precision.pow(-0.5))
 
-  # def parameters(self):
-  #   return [self.mu_layers, self.precision_layers]
-
 class PoopGenerativeNet(object):
   def __init__(self, almost_generative_nets, net_input_dim, dim_z):
     self.almost_generative_nets = almost_generative_nets
@@ -598,9 +608,10 @@ class PoopGenerativeNet(object):
       for ix, net in enumerate(self.almost_generative_nets)
     ]
 
-class GroupSparseFacebackoiVAE(object):
-  """A product of experts (PoE) style posterior approximation but with sparsity
-  only on the generative side."""
+class FacebackVAE(object):
+  """A product of experts (PoE) style posterior approximation with shared
+  sparsity on both the inference and generative models using group lasso with
+  groups spanning both models."""
   def __init__(
       self,
       inference_net,
@@ -612,10 +623,10 @@ class GroupSparseFacebackoiVAE(object):
     """
     Arguments
     =========
-    inference_net : a PoopInferenceNet
-    generative_net : a PoopGenerativeNet
+    inference_net : a FacebackInferenceNet
+    generative_net : a FacebackGenerativeNet
     prior_z : Normal distribution of shape [1, dim_z]
-    prior_theta
+    prior_theta : prior over the network weights
     lam : the \\lambda sparsity parameter
     """
     self.inference_net = inference_net
@@ -716,13 +727,8 @@ class GroupSparseFacebackoiVAE(object):
       'reconstructed': self.generative_net(z_sample)
     }
 
-  # def parameters(self):
-  #   return itertools.chain(
-  #     *[net.parameters() for net in self.inference_nets],
-  #     *[net.parameters() for net in self.generative_nets],
-  #     [self.sparsity_matrix]
-  #   )
-
+################################################################################
+# These are mixture weighting networks for the mixture model versions.
 class VotingMixtureWeightNet(object):
   def __init__(self, embeddings, W, b):
     """Each group votes independently for its mixture weight. Group input data
