@@ -29,7 +29,7 @@ from faceback import SparseProductOfExpertsVAE, OneSidedFacebackoiVAE, FacebackV
 from utils import no_ticks, sample_random_mask
 
 
-class BarsFacebackGroupSparse(object):
+class BarsFaceback(object):
   """Runs the sparse PoE faceback framework on the bars data with the split group sparsity prior."""
 
   PARAMS = [
@@ -313,7 +313,7 @@ class BarsFacebackGroupSparse(object):
     self.results_dir_reconstructions.mkdir(exist_ok=False)
     self.results_dir_pickles.mkdir(exist_ok=False)
     json.dump(
-      {p: getattr(self, p) for p in BarsFacebackGroupSparse.PARAMS},
+      {p: getattr(self, p) for p in BarsFaceback.PARAMS},
       open(self.results_dir_params, 'w'),
       sort_keys=True,
       indent=2,
@@ -323,7 +323,7 @@ class BarsFacebackGroupSparse(object):
 if __name__ == '__main__':
   torch.manual_seed(0)
 
-  experiment = BarsFacebackGroupSparse(
+  experiment = BarsFaceback(
     img_size=2,
     num_samples=10000,
     batch_size=32,
