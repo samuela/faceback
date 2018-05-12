@@ -419,7 +419,7 @@ def run_experiment(lam, group_available_prob, dim_z):
     initial_baseline_precision=100,
     prior_theta_sigma=1,
     group_available_prob=group_available_prob,
-    base_results_dir=Path('deleteme/')
+    base_results_dir=Path('results/')
   )
 
   stdout_path = experiment.results_dir / 'stdout'
@@ -439,6 +439,7 @@ if __name__ == '__main__':
   group_available_probs = [0.5, 1]
   dim_zs = [4, 8, 16, 32]
 
+  # Pool will by default use as many processes as `os.cpu_count()` indicates.
   with multiprocessing.Pool() as pool:
     pool.starmap(
       run_experiment,
