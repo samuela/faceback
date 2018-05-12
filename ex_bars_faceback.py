@@ -219,26 +219,12 @@ class BarsFaceback(object):
         print(self.generative_sigma_adjustment.data[0])
         # print(self.vae.generative_nets[0].param_nets[1][0].bias.data)
 
-      if self.base_results_dir is not None:
-        # This has a good mix when img_size = 4
-        fig = self.viz_reconstruction(12)
-        plt.savefig(self.results_dir_reconstructions / f'epoch{self.epoch}.pdf')
-        plt.close(fig)
+      # Checkpoint every 10 epochs
+      if self.epoch % 10 == 0:
+        self.checkpoint()
 
-        fig = self.viz_elbo()
-        plt.savefig(self.results_dir_elbo / f'epoch{self.epoch}.pdf')
-        plt.close(fig)
-
-        fig = self.viz_sparsity()
-        plt.savefig(self.results_dir_sparsity_matrix / f'epoch{self.epoch}.pdf')
-        plt.close(fig)
-
-        dill.dump(self, open(self.results_dir_pickles / f'epoch{self.epoch}.p', 'wb'))
-      else:
-        self.viz_reconstruction(12)
-        self.viz_elbo()
-        self.viz_sparsity()
-        plt.show()
+    # Checkpoint at the very end as well
+    self.checkpoint()
 
   def test_loglik(self):
     Xs = [Variable(self.test_data[:, i]) for i in range(self.img_size)]
@@ -318,6 +304,28 @@ class BarsFaceback(object):
       indent=2,
       separators=(',', ': ')
     )
+
+  def checkpoint(self):
+    if self.base_results_dir is not None:
+      # This has a good mix when img_size = 4
+      fig = self.viz_reconstruction(12)
+      plt.savefig(self.results_dir_reconstructions / f'epoch{self.epoch}.pdf')
+      plt.close(fig)
+
+      fig = self.viz_elbo()
+      plt.savefig(self.results_dir_elbo / f'epoch{self.epoch}.pdf')
+      plt.close(fig)
+
+      fig = self.viz_sparsity()
+      plt.savefig(self.results_dir_sparsity_matrix / f'epoch{self.epoch}.pdf')
+      plt.close(fig)
+
+      dill.dump(self, open(self.results_dir_pickles / f'epoch{self.epoch}.p', 'wb'))
+    else:
+      self.viz_reconstruction(12)
+      self.viz_elbo()
+      self.viz_sparsity()
+      plt.show()
 
 if __name__ == '__main__':
   torch.manual_seed(0)
