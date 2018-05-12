@@ -276,7 +276,6 @@ class SparseProductOfExpertsVAE(object):
     self.sparsity_matrix = Variable(
       # (1.0 / math.sqrt(self.dim_z)) * torch.randn(self.num_groups, self.dim_z),
       torch.ones(self.num_groups, self.dim_z),
-      # torch.eye(2), #### XXX
       requires_grad=True
     )
 
