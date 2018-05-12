@@ -44,7 +44,8 @@ class BarsFaceback(object):
     'generative_net_input_dim',
     'noise_stddev',
     'group_available_prob',
-    'initial_sigma_adjustment'
+    'initial_sigma_adjustment',
+    'prior_theta_sigma'
   ]
 
   def __init__(
@@ -61,6 +62,7 @@ class BarsFaceback(object):
       noise_stddev,
       group_available_prob,
       initial_sigma_adjustment,
+      prior_theta_sigma,
       base_results_dir=None
   ):
     self.img_size = img_size
@@ -75,6 +77,7 @@ class BarsFaceback(object):
     self.noise_stddev = noise_stddev
     self.group_available_prob = group_available_prob
     self.initial_sigma_adjustment = initial_sigma_adjustment
+    self.prior_theta_sigma = prior_theta_sigma
     self.base_results_dir = base_results_dir
 
     # Sample the training data and set up a DataLoader
@@ -120,7 +123,7 @@ class BarsFaceback(object):
       inference_net=self.inference_net,
       generative_net=self.generative_net,
       prior_z=self.prior_z,
-      prior_theta=NormalPriorTheta(sigma=1e3),
+      prior_theta=NormalPriorTheta(sigma=self.prior_theta_sigma),
       lam=self.lam
     )
 
@@ -331,7 +334,8 @@ if __name__ == '__main__':
     generative_net_input_dim=8,
     noise_stddev=0.05,
     group_available_prob=0.5,
-    initial_sigma_adjustment=1,
+    initial_sigma_adjustment=0,
+    prior_theta_sigma=1,
     base_results_dir=Path('results/')
   )
-  experiment.train(250)
+  experiment.train(100)
