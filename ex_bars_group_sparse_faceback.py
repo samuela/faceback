@@ -1,6 +1,10 @@
 import itertools
+import json
 from pathlib import Path
-import pickle
+import random
+import string
+
+import dill
 
 import matplotlib.pyplot as plt
 
@@ -25,6 +29,22 @@ from utils import no_ticks, sample_random_mask
 
 class BarsFacebackGroupSparse(object):
   """Runs the sparse PoE faceback framework on the bars data with the split group sparsity prior."""
+
+  PARAMS = [
+    'img_size',
+    'num_samples',
+    'batch_size',
+    'dim_z',
+    'lam',
+    'sparsity_matrix_lr',
+    'initial_baseline_precision',
+    'inference_net_output_dim',
+    'generative_net_input_dim',
+    'noise_stddev',
+    'group_available_prob',
+    'initial_sigma_adjustment'
+  ]
+
   def __init__(
       self,
       img_size,
@@ -37,6 +57,8 @@ class BarsFacebackGroupSparse(object):
       inference_net_output_dim,
       generative_net_input_dim,
       noise_stddev,
+      group_available_prob,
+      initial_sigma_adjustment,
       base_results_dir=None
   ):
     self.img_size = img_size
@@ -49,6 +71,8 @@ class BarsFacebackGroupSparse(object):
     self.inference_net_output_dim = inference_net_output_dim
     self.generative_net_input_dim = generative_net_input_dim
     self.noise_stddev = noise_stddev
+    self.group_available_prob = group_available_prob
+    self.initial_sigma_adjustment = initial_sigma_adjustment
     self.base_results_dir = base_results_dir
 
     # Sample the training data and set up a DataLoader
@@ -61,6 +85,11 @@ class BarsFacebackGroupSparse(object):
       ),
       batch_size=batch_size,
       shuffle=True
+    )
+
+    self.generative_sigma_adjustment = Variable(
+      self.initial_sigma_adjustment * torch.ones(1),
+      requires_grad=True
     )
 
     self.epoch_counter = itertools.count()
@@ -109,15 +138,14 @@ class BarsFacebackGroupSparse(object):
         set(p for net in self.generative_net.almost_generative_nets for p in net.parameters()),
         lr=1e-3
       ),
-      torch.optim.SGD([self.generative_net.connectivity_matrices], lr=self.sparsity_matrix_lr)
+      torch.optim.SGD([self.generative_net.connectivity_matrices], lr=self.sparsity_matrix_lr),
+      torch.optim.Adam([self.generative_sigma_adjustment], lr=1e-3)
     ])
 
-    # self.elbo_plot_fig, self.elbo_plot_ax = None, None
-    # self.reconstruction_fig, self.reconstruction_ax = None, None
-    # self.sparsity_fig, self.sparsity_ax = None, None
-    # self.sparsity_colorbar = None
-
     if self.base_results_dir is not None:
+      # https://stackoverflow.com/questions/2257441/random-string-generation-with-upper-case-letters-and-digits-in-python?utm_medium=organic&utm_source=google_rich_qa&utm_campaign=google_rich_qa
+      self.results_folder_name = 'bars' + ''.join(random.choice(string.ascii_uppercase + string.digits) for _ in range(16))
+      self.results_dir = self.base_results_dir / self.results_folder_name
       self._init_results_dir()
 
   def sample_data(self, num_samples):
@@ -137,7 +165,7 @@ class BarsFacebackGroupSparse(object):
       torch.nn.Linear(self.generative_net_input_dim, dim_x),
       torch.nn.Sequential(
         torch.nn.Linear(self.generative_net_input_dim, dim_x),
-        Lambda(lambda x: torch.exp(0.5 * x))
+        Lambda(lambda x: torch.exp(0.5 * x + self.generative_sigma_adjustment))
       )
     )
 
@@ -157,9 +185,7 @@ class BarsFacebackGroupSparse(object):
           Xs=[Variable(data[:, i]) for i in range(self.img_size)],
           group_mask=Variable(torch.ones(actual_batch_size, self.img_size)),
           inference_group_mask=Variable(
-            # sample_random_mask(actual_batch_size, self.img_size)
-            torch.ones(actual_batch_size, self.img_size)
-            # torch.FloatTensor([1, 0, 0, 0]).expand(actual_batch_size, -1)
+            sample_random_mask(actual_batch_size, self.img_size, self.group_available_prob)
           )
         )
         elbo = info['elbo']
@@ -185,6 +211,7 @@ class BarsFacebackGroupSparse(object):
         print(f'    L1               : {logprob_L1.data[0]}')
         print(f'  test log lik.      : {test_ll}')
         print(self.inference_net.baseline_precision.data[0])
+        print(self.generative_sigma_adjustment.data[0])
         # print(self.vae.generative_nets[0].param_nets[1][0].bias.data)
 
       if self.base_results_dir is not None:
@@ -201,7 +228,7 @@ class BarsFacebackGroupSparse(object):
         plt.savefig(self.results_dir_sparsity_matrix / f'epoch{self.epoch}.pdf')
         plt.close(fig)
 
-        pickle.dump(self, open(self.results_dir_pickles / f'epoch{self.epoch}.p', 'wb'))
+        dill.dump(self, open(self.results_dir_pickles / f'epoch{self.epoch}.p', 'wb'))
       else:
         self.viz_reconstruction(12)
         self.viz_elbo()
@@ -270,34 +297,26 @@ class BarsFacebackGroupSparse(object):
     torch.set_rng_state(pytorch_rng_state)
     return fig
 
-  def results_dir(self):
-    params = [
-      'img_size',
-      'num_samples',
-      'batch_size',
-      'dim_z',
-      'lam',
-      'sparsity_matrix_lr',
-      'initial_baseline_precision',
-      'inference_net_output_dim',
-      'generative_net_input_dim',
-      'noise_stddev'
-    ]
-    poop = ' '.join([f'{p}={getattr(self, p)}' for p in params])
-    return self.base_results_dir / f'randn-init group-sparse-bars {poop}'
-
   def _init_results_dir(self):
-    self.results_dir_elbo = self.results_dir() / 'elbo_plot'
-    self.results_dir_sparsity_matrix = self.results_dir() / 'sparsity_matrix'
-    self.results_dir_reconstructions = self.results_dir() / 'reconstructions'
-    self.results_dir_pickles = self.results_dir() / 'pickles'
+    self.results_dir_params = self.results_dir / 'params.json'
+    self.results_dir_elbo = self.results_dir / 'elbo_plot'
+    self.results_dir_sparsity_matrix = self.results_dir / 'sparsity_matrix'
+    self.results_dir_reconstructions = self.results_dir / 'reconstructions'
+    self.results_dir_pickles = self.results_dir / 'pickles'
 
     # The results_dir should be unique
-    self.results_dir().mkdir(exist_ok=False)
+    self.results_dir.mkdir(exist_ok=False)
     self.results_dir_elbo.mkdir(exist_ok=False)
     self.results_dir_sparsity_matrix.mkdir(exist_ok=False)
     self.results_dir_reconstructions.mkdir(exist_ok=False)
     self.results_dir_pickles.mkdir(exist_ok=False)
+    json.dump(
+      {p: getattr(self, p) for p in BarsFacebackGroupSparse.PARAMS},
+      open(self.results_dir_params, 'w'),
+      sort_keys=True,
+      indent=2,
+      separators=(',', ': ')
+    )
 
 if __name__ == '__main__':
   torch.manual_seed(0)
@@ -306,13 +325,15 @@ if __name__ == '__main__':
     img_size=2,
     num_samples=10000,
     batch_size=32,
-    dim_z=2,
-    lam=1,
+    dim_z=4,
+    lam=0,
     sparsity_matrix_lr=1e-3,
     initial_baseline_precision=100,
     inference_net_output_dim=8,
     generative_net_input_dim=8,
     noise_stddev=0.05,
+    group_available_prob=0.5,
+    initial_sigma_adjustment=1,
     base_results_dir=Path('results/')
   )
   experiment.train(250)

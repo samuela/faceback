@@ -20,5 +20,5 @@ def no_ticks(ax):
 #   combos = list(itertools.product([0, 1], repeat=cols))[1:]
 #   return torch.FloatTensor([random.choice(combos) for _ in range(rows)])
 
-def sample_random_mask(rows, cols):
-  return (torch.randn(rows, cols) < 0).float()
+def sample_random_mask(rows, cols, prob):
+  return (torch.rand(rows, cols) < prob).float()
