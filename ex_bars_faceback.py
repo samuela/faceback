@@ -25,7 +25,7 @@ from kindling.distributions import (
 from kindling.utils import Lambda, NormalPriorTheta, MetaOptimizer, NoPriorTheta
 
 from bars_data import sample_many_one_bar_images, sample_many_bars_images
-from faceback import SparseProductOfExpertsVAE, OneSidedFacebackoiVAE, FacebackVAE, FacebackInferenceNet, PoopGenerativeNet
+from faceback import FacebackVAE, FacebackInferenceNet, FacebackGenerativeNet
 from utils import no_ticks, sample_random_mask
 
 
@@ -111,7 +111,7 @@ class BarsFaceback(object):
       prior_z=self.prior_z,
       initial_baseline_precision=self.initial_baseline_precision
     )
-    self.generative_net = PoopGenerativeNet(
+    self.generative_net = FacebackGenerativeNet(
       almost_generative_nets=[self.make_almost_generative_net(dim_x) for dim_x in dim_xs],
       net_input_dim=self.generative_net_input_dim,
       dim_z=self.dim_z

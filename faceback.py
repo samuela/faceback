@@ -585,7 +585,7 @@ class FacebackInferenceNet(object):
 
     return Normal(mu, precision.pow(-0.5))
 
-class PoopGenerativeNet(object):
+class FacebackGenerativeNet(object):
   def __init__(self, almost_generative_nets, net_input_dim, dim_z):
     self.almost_generative_nets = almost_generative_nets
     self.net_input_dim = net_input_dim
