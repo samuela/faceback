@@ -156,7 +156,7 @@ class MocapSingleJointGroupsFaceback(object):
 
     if self.base_results_dir is not None:
       # https://stackoverflow.com/questions/2257441/random-string-generation-with-upper-case-letters-and-digits-in-python?utm_medium=organic&utm_source=google_rich_qa&utm_campaign=google_rich_qa
-      self.results_folder_name = 'mocap_single_joint' + ''.join(random.choice(string.ascii_uppercase + string.digits) for _ in range(16))
+      self.results_folder_name = 'shallow_model_mocap_single_joint' + ''.join(random.choice(string.ascii_uppercase + string.digits) for _ in range(16))
       self.results_dir = self.base_results_dir / self.results_folder_name
       self._init_results_dir()
 
@@ -197,26 +197,21 @@ class MocapSingleJointGroupsFaceback(object):
         print(f'  test log lik.      : {test_ll}', flush=True)
 
       # Checkpoint every 10 epochs
-      if self.epoch % 10 == 0:
+      if self.epoch % 50 == 0:
         self.checkpoint()
 
     # Checkpoint at the very end as well
     self.checkpoint()
 
   def make_almost_generative_net(self, dim_x):
-    hidden_size = 32
-    shared = torch.nn.Sequential(
-      torch.nn.Linear(self.generative_net_input_dim, hidden_size),
-      torch.nn.ReLU()
-    )
     return NormalNet(
       torch.nn.Sequential(
-        shared,
-        torch.nn.Linear(hidden_size, dim_x)
+        torch.nn.ReLU(),
+        torch.nn.Linear(self.generative_net_input_dim, dim_x)
       ),
       torch.nn.Sequential(
-        shared,
-        torch.nn.Linear(hidden_size, dim_x),
+        torch.nn.ReLU(),
+        torch.nn.Linear(self.generative_net_input_dim, dim_x),
         # Learn the log variance
         Lambda(lambda x: torch.exp(0.5 * x))
       )
@@ -405,11 +400,11 @@ def run_experiment(lam, group_available_prob, dim_z):
   print(f'  group_available_prob = {group_available_prob}')
   print(f'  dim_z = {dim_z}')
 
-  # Trial 12 is a faster walk so it's a bit different, best to ignore.
+  # Subject 7 trial 12 is a faster walk so it's a bit different, best to ignore.
   experiment = MocapSingleJointGroupsFaceback(
-    subject=7,
-    train_trials=[1, 2, 3, 4, 5, 6, 7, 8, 9, 10],
-    test_trials=[11],
+    subject=55,
+    train_trials=list(range(1, 25 + 1)),
+    test_trials=[26, 27, 28],
     dim_z=dim_z,
     batch_size=64,
     lam=lam,
@@ -435,12 +430,12 @@ def run_experiment(lam, group_available_prob, dim_z):
   sys.stderr = sys.__stderr__
 
 if __name__ == '__main__':
-  lams = [1e-2, 1e-1, 1]
+  lams = [0.1, 1]
   group_available_probs = [0.5, 1]
-  dim_zs = [4, 8, 16, 32]
+  dim_zs = [4, 8, 16]
 
   # Pool will by default use as many processes as `os.cpu_count()` indicates.
-  with multiprocessing.Pool() as pool:
+  with multiprocessing.Pool(processes=2) as pool:
     pool.starmap(
       run_experiment,
       itertools.product(lams, group_available_probs, dim_zs)
