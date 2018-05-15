@@ -1,7 +1,7 @@
 """Various models for solving VAEs with missing data."""
 
 import itertools
-# import math
+import math
 
 import torch
 from torch.autograd import Variable
@@ -545,14 +545,14 @@ class FacebackInferenceNet(object):
 
     self.mu_layers = Variable(
       (
-        # 2.0 / (math.sqrt(self.net_output_dim) + math.sqrt(self.dim_z)) *
+        2.0 / (math.sqrt(self.net_output_dim) + math.sqrt(self.dim_z)) *
         torch.randn(self.num_groups, self.net_output_dim, self.dim_z)
       ),
       requires_grad=True
     )
     self.precision_layers = Variable(
       (
-        # 2.0 / (math.sqrt(self.net_output_dim) + math.sqrt(self.dim_z)) *
+        2.0 / (math.sqrt(self.net_output_dim) + math.sqrt(self.dim_z)) *
         torch.randn(self.num_groups, self.net_output_dim, self.dim_z)
       ),
       requires_grad=True
@@ -595,7 +595,7 @@ class FacebackGenerativeNet(object):
 
     self.connectivity_matrices = Variable(
       (
-        # 2.0 / (math.sqrt(self.dim_z) + math.sqrt(self.net_input_dim)) *
+        2.0 / (math.sqrt(self.dim_z) + math.sqrt(self.net_input_dim)) *
         torch.randn(self.num_groups, self.dim_z, self.net_input_dim)
       ),
       requires_grad=True
