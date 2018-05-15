@@ -656,10 +656,7 @@ class FacebackVAE(object):
       self.prior_theta.logprob(net)
       for net in self.generative_net.almost_generative_nets
     )
-    logprob_L1 = -self.lam * torch.sum(torch.sqrt(
-      torch.sum(self.inference_net.precision_layers.pow(2), dim=1) +
-      torch.sum(self.generative_net.connectivity_matrices.pow(2), dim=2)
-    ))
+    logprob_L1 = -self.lam * torch.sum(self.sparsity_matrix())
 
     # `loss` is the differentiable part of the ELBO. We negate it in order to do
     # descent. `elbo` is the complete ELBO including the L1 sparsity prior.
@@ -697,10 +694,7 @@ class FacebackVAE(object):
     ) / mc_samples / batch_size
 
   def proximal_step(self, t):
-    norms = torch.sqrt(
-      torch.sum(self.inference_net.precision_layers.data.pow(2), dim=1) +
-      torch.sum(self.generative_net.connectivity_matrices.data.pow(2), dim=2)
-    )
+    norms = self.sparsity_matrix().data
     # Add 1e-16 to avoid divide by zero
     adjust = torch.clamp(norms - t, min=0) * (norms + 1e-16).pow(-1)
     self.inference_net.precision_layers.data.mul_(adjust.unsqueeze(1))
@@ -732,6 +726,19 @@ class FacebackVAE(object):
       torch.sum(self.inference_net.precision_layers.pow(2), dim=1) +
       torch.sum(self.generative_net.connectivity_matrices.pow(2), dim=2)
     )
+
+class FacebackDecoderSparseOnly(FacebackVAE):
+  def sparsity_matrix(self):
+    """Construct the sparsity matrix between groups and latent components."""
+    return torch.sqrt(
+      torch.sum(self.generative_net.connectivity_matrices.pow(2), dim=2)
+    )
+
+  def proximal_step(self, t):
+    norms = self.sparsity_matrix().data
+    # Add 1e-16 to avoid divide by zero
+    adjust = torch.clamp(norms - t, min=0) * (norms + 1e-16).pow(-1)
+    self.generative_net.connectivity_matrices.data.mul_(adjust.unsqueeze(2))
 
 ################################################################################
 # These are mixture weighting networks for the mixture model versions.
