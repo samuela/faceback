@@ -395,6 +395,8 @@ class MocapSingleJointGroupsFaceback(object):
 
 # See https://stackoverflow.com/questions/1501651/log-output-of-multiprocessing-process?utm_medium=organic&utm_source=google_rich_qa&utm_campaign=google_rich_qa
 def run_experiment(lam, group_available_prob, dim_z):
+  torch.set_num_threads(2)
+
   print('Running experiment...')
   print(f'  lam = {lam}')
   print(f'  group_available_prob = {group_available_prob}')
