@@ -452,7 +452,7 @@ def run_experiment(lam, group_available_prob, dim_z):
 
 if __name__ == '__main__':
   lams = [0, 0.1, 1]
-  group_available_probs = [0.5, 1]
+  group_available_probs = [0.5, 0.75, 0.9, 1]
   dim_zs = [8, 16, 32]
 
   # Pool will by default use as many processes as `os.cpu_count()` indicates.
