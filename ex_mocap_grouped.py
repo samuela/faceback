@@ -22,7 +22,7 @@ from faceback import FacebackGenerativeNet, FacebackInferenceNet, FacebackVAE
 from kindling.distributions import Normal, NormalNet
 from kindling.utils import Lambda, MetaOptimizer, NormalPriorTheta
 from mocap import mocap_data
-from utils import sample_random_mask
+from utils import sample_random_mask, viz_sparsity
 
 # TODO merge this with the single joint per group model
 
@@ -253,16 +253,6 @@ class MocapGroupedFaceback(object):
     plt.ylabel('ELBO')
     return fig
 
-  def viz_sparsity(self):
-    """Visualize the sparisty matrix associating latent components with
-    groups."""
-    fig = plt.figure()
-    plt.imshow(self.vae.sparsity_matrix().data.numpy())
-    plt.colorbar()
-    plt.xlabel('latent components')
-    plt.ylabel('groups')
-    return fig
-
   def viz_reconstruction(self, plot_seed, num_examples):
     pytorch_rng_state = torch.get_rng_state()
     torch.manual_seed(plot_seed)
@@ -406,7 +396,7 @@ class MocapGroupedFaceback(object):
       plt.savefig(self.results_dir_elbo / f'epoch{self.epoch}.pdf')
       plt.close(fig)
 
-      fig = self.viz_sparsity()
+      fig, _ = viz_sparsity(self.vae)
       plt.savefig(self.results_dir_sparsity_matrix / f'epoch{self.epoch}.pdf')
       plt.close(fig)
 
@@ -414,7 +404,7 @@ class MocapGroupedFaceback(object):
     else:
       self.viz_reconstruction(0, num_examples=6)
       self.viz_elbo()
-      self.viz_sparsity()
+      viz_sparsity(self.vae)
       plt.show()
 
 # # See https://stackoverflow.com/questions/1501651/log-output-of-multiprocessing-process?utm_medium=organic&utm_source=google_rich_qa&utm_campaign=google_rich_qa
