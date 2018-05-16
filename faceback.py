@@ -6,6 +6,7 @@ import math
 import torch
 from torch.autograd import Variable
 # from kindling.nan_police import torch
+# from torch.nn import functional as F
 
 from kindling.distributions import Normal
 from kindling.utils import KL_Normals, KL_Normals_independent
@@ -567,7 +568,9 @@ class FacebackInferenceNet(object):
     outs = [net(X) for net, X in zip(self.almost_inference_nets, Xs)]
     mus = [out @ self.mu_layers[ix] for ix, out in enumerate(outs)]
     precisions = [
-      torch.abs(out @ self.precision_layers[ix] + self.baseline_precision)
+      torch.abs((out + self.baseline_precision) @ self.precision_layers[ix])
+      # F.relu((out + self.baseline_precision) @ self.precision_layers[ix])
+      # torch.pow((out + self.baseline_precision) @ self.precision_layers[ix], 2)
       for ix, out in enumerate(outs)
     ]
 
