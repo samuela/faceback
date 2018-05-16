@@ -156,7 +156,7 @@ class MocapSingleJointGroupsFaceback(object):
 
     if self.base_results_dir is not None:
       # https://stackoverflow.com/questions/2257441/random-string-generation-with-upper-case-letters-and-digits-in-python?utm_medium=organic&utm_source=google_rich_qa&utm_campaign=google_rich_qa
-      self.results_folder_name = 'shallow_model_mocap_single_joint' + ''.join(random.choice(string.ascii_uppercase + string.digits) for _ in range(16))
+      self.results_folder_name = 'mocap_subject7_' + ''.join(random.choice(string.ascii_uppercase + string.digits) for _ in range(16))
       self.results_dir = self.base_results_dir / self.results_folder_name
       self._init_results_dir()
 
@@ -166,12 +166,12 @@ class MocapSingleJointGroupsFaceback(object):
         # The final batch may not have the same size as `batch_size`.
         actual_batch_size = data.size(0)
 
+        mask = sample_random_mask(actual_batch_size, num_groups, self.group_available_prob)
         info = self.vae.elbo(
           Xs=[Variable(x) for x in self.split_into_groups(data)],
-          group_mask=Variable(torch.ones(actual_batch_size, num_groups)),
-          inference_group_mask=Variable(
-            sample_random_mask(actual_batch_size, num_groups, self.group_available_prob)
-          )
+          # group_mask=Variable(torch.ones(actual_batch_size, num_groups)),
+          group_mask=Variable(mask),
+          inference_group_mask=Variable(mask)
         )
         elbo = info['elbo']
         loss = info['loss']
@@ -197,7 +197,7 @@ class MocapSingleJointGroupsFaceback(object):
         print(f'  test log lik.      : {test_ll}', flush=True)
 
       # Checkpoint every 10 epochs
-      if self.epoch % 50 == 0:
+      if self.epoch % 10 == 0:
         self.checkpoint()
 
     # Checkpoint at the very end as well
@@ -402,15 +402,20 @@ def run_experiment(lam, group_available_prob, dim_z):
 
   # Subject 7 trial 12 is a faster walk so it's a bit different, best to ignore.
   experiment = MocapSingleJointGroupsFaceback(
-    subject=55,
-    train_trials=list(range(1, 25 + 1)),
-    test_trials=[26, 27, 28],
+    # subject=55,
+    # train_trials=list(range(1, 25 + 1)),
+    # test_trials=[26, 27, 28],
+
+    subject=7,
+    train_trials=[1, 2, 3, 4, 5, 6, 7, 8, 9, 10],
+    test_trials=[11],
+
     dim_z=dim_z,
     batch_size=64,
     lam=lam,
-    sparsity_matrix_lr=1e-3,
-    inference_net_output_dim=32,
-    generative_net_input_dim=32,
+    sparsity_matrix_lr=1e-4,
+    inference_net_output_dim=16,
+    generative_net_input_dim=16,
     initial_baseline_precision=100,
     prior_theta_sigma=1,
     group_available_prob=group_available_prob,
@@ -422,7 +427,7 @@ def run_experiment(lam, group_available_prob, dim_z):
   with open(stdout_path, 'w') as stdout, open(stderr_path, 'w') as stderr:
     sys.stdout = stdout
     sys.stderr = stderr
-    experiment.train(1000)
+    experiment.train(100)
 
   # Reset sys.stdout and sys.stderr outside of the with in case anything goes
   # wrong
@@ -431,8 +436,8 @@ def run_experiment(lam, group_available_prob, dim_z):
 
 if __name__ == '__main__':
   lams = [0.1, 1]
-  group_available_probs = [0.5, 1]
-  dim_zs = [4, 8, 16]
+  group_available_probs = [0.5]
+  dim_zs = [16]
 
   # Pool will by default use as many processes as `os.cpu_count()` indicates.
   with multiprocessing.Pool(processes=2) as pool:
