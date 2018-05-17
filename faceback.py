@@ -682,7 +682,7 @@ class FacebackVAE(object):
 
     # List of [batch_size * mc_samples, dim_group_x]
     Xsrep = [Variable(X.data.repeat(mc_samples, 1)) for X in Xs]
-    group_likelihoods = self.generative_net(z_sample)\
+    group_likelihoods = self.generative_net(z_sample)
 
     # Evaluating the log likelihood always happens on all available data. Sum
     # the likelihoods over all of the available groups.
