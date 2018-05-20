@@ -324,7 +324,7 @@ def plot_skeleton(skeleton, xyz, axes=None):
   # For some reason the xyz are out of order in the data.
   permutation = [0, 2, 1]
   xyz_stack = np.array(list(xyz.values()))[:, permutation]
-  axes.scatter(xyz_stack[:, 0], xyz_stack[:, 1], xyz_stack[:, 2])
+  axes.scatter(xyz_stack[:, 0], xyz_stack[:, 1], xyz_stack[:, 2], s=5)
   for parent, children in skeleton['hierarchy'].items():
     for child in children:
       axes.plot(

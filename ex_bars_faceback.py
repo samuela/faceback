@@ -26,7 +26,7 @@ from kindling.utils import Lambda, NormalPriorTheta, MetaOptimizer, NoPriorTheta
 
 from bars_data import sample_many_one_bar_images, sample_many_bars_images
 from faceback import FacebackVAE, FacebackInferenceNet, FacebackGenerativeNet
-from utils import no_ticks, sample_random_mask
+from utils import no_ticks, sample_random_mask, viz_sparsity
 
 
 class BarsFaceback(object):
@@ -63,7 +63,8 @@ class BarsFaceback(object):
       group_available_prob,
       initial_sigma_adjustment,
       prior_theta_sigma,
-      base_results_dir=None
+      base_results_dir=None,
+      prefix='bars_'
   ):
     self.img_size = img_size
     self.num_samples = num_samples
@@ -79,6 +80,7 @@ class BarsFaceback(object):
     self.initial_sigma_adjustment = initial_sigma_adjustment
     self.prior_theta_sigma = prior_theta_sigma
     self.base_results_dir = base_results_dir
+    self.prefix = prefix
 
     # Sample the training data and set up a DataLoader
     self.train_data = self.sample_data(self.num_samples)
@@ -149,7 +151,7 @@ class BarsFaceback(object):
 
     if self.base_results_dir is not None:
       # https://stackoverflow.com/questions/2257441/random-string-generation-with-upper-case-letters-and-digits-in-python?utm_medium=organic&utm_source=google_rich_qa&utm_campaign=google_rich_qa
-      self.results_folder_name = 'bars' + ''.join(random.choice(string.ascii_uppercase + string.digits) for _ in range(16))
+      self.results_folder_name = self.prefix + ''.join(random.choice(string.ascii_uppercase + string.digits) for _ in range(16))
       self.results_dir = self.base_results_dir / self.results_folder_name
       self._init_results_dir()
 
@@ -239,16 +241,6 @@ class BarsFaceback(object):
     plt.ylabel('ELBO')
     return fig
 
-  def viz_sparsity(self):
-    """Visualize the sparisty matrix associating latent components with
-    groups."""
-    fig = plt.figure()
-    plt.imshow(self.vae.sparsity_matrix().data.numpy())
-    plt.colorbar()
-    plt.xlabel('latent components')
-    plt.ylabel('groups')
-    return fig
-
   def viz_reconstruction(self, plot_seed):
     pytorch_rng_state = torch.get_rng_state()
     torch.manual_seed(plot_seed)
@@ -308,7 +300,7 @@ class BarsFaceback(object):
   def checkpoint(self):
     if self.base_results_dir is not None:
       # This has a good mix when img_size = 4
-      fig = self.viz_reconstruction(12)
+      fig = self.viz_reconstruction(12345)
       plt.savefig(self.results_dir_reconstructions / f'epoch{self.epoch}.pdf')
       plt.close(fig)
 
@@ -316,27 +308,27 @@ class BarsFaceback(object):
       plt.savefig(self.results_dir_elbo / f'epoch{self.epoch}.pdf')
       plt.close(fig)
 
-      fig = self.viz_sparsity()
+      fig, ax = viz_sparsity(self.vae, group_names=['top left', 'top right', 'bottom left', 'bottom right'])
       plt.savefig(self.results_dir_sparsity_matrix / f'epoch{self.epoch}.pdf')
       plt.close(fig)
 
       dill.dump(self, open(self.results_dir_pickles / f'epoch{self.epoch}.p', 'wb'))
     else:
-      self.viz_reconstruction(12)
+      self.viz_reconstruction(12345)
       self.viz_elbo()
-      self.viz_sparsity()
+      viz_sparsity(self.vae, group_names=['top left', 'top right', 'bottom left', 'bottom right'])
       plt.show()
 
 if __name__ == '__main__':
   torch.manual_seed(0)
 
   experiment = BarsFaceback(
-    img_size=2,
+    img_size=4,
     num_samples=10000,
     batch_size=32,
     dim_z=4,
-    lam=0,
-    sparsity_matrix_lr=1e-3,
+    lam=1,
+    sparsity_matrix_lr=1e-4,
     initial_baseline_precision=100,
     inference_net_output_dim=8,
     generative_net_input_dim=8,
@@ -344,6 +336,7 @@ if __name__ == '__main__':
     group_available_prob=0.5,
     initial_sigma_adjustment=0,
     prior_theta_sigma=1,
-    base_results_dir=Path('results/')
+    base_results_dir=Path('results/'),
+    prefix='bars_final_'
   )
   experiment.train(100)

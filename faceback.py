@@ -12,10 +12,10 @@ from kindling.distributions import Normal
 from kindling.utils import KL_Normals, KL_Normals_independent
 
 
-class OldFacebackVAE(object):
-  """An implementation of a Faceback variational autoenoder. Note that this
-  particular implementation requires that the prior over z and the approximate
-  posterior q(z | x) must both be diagonal normal distributions.
+class JMVAEPlus(object):
+  """An implementation of JMVAE+ model. Note that this particular implementation
+  requires that the prior over z and the approximate posterior q(z | x) must
+  both be diagonal normal distributions.
 
   This is the mixture of Gaussians model.
 
@@ -130,14 +130,14 @@ class OldFacebackVAE(object):
 
     Returns
     =======
-    list of Variables of shape [batch_size, dim_x] where dim_x can vary.
+    list of Distributions of shape [batch_size, dim_x] where dim_x can vary.
     """
     mix_weights = self.mixture_weights(Xs, inference_group_mask)
     mix_sample = torch.multinomial(mix_weights, 1)
-    q_z_sample = torch.stack([
-      self.inference_nets[ix](Xs[ix]).sample()
-      for ix in mix_sample.data.view(-1)
-    ])
+    q_z_sample = torch.cat([
+      self.inference_nets[group](Xs[group][i].view(1, -1)).sample()
+      for i, group in enumerate(mix_sample.data.view(-1))
+    ], dim=0)
     return {
       'mixture_weights': mix_weights,
       'mixture_sample': mix_sample,
@@ -534,32 +534,37 @@ class FacebackInferenceNet(object):
       almost_inference_nets,
       net_output_dim,
       prior_z,
-      initial_baseline_precision
+      initial_baseline_precision,
+      use_gpu=False
   ):
     self.almost_inference_nets = almost_inference_nets
     self.net_output_dim = net_output_dim
     self.prior_z = prior_z
     self.initial_baseline_precision = initial_baseline_precision
+    self.use_gpu = use_gpu
 
     self.num_groups = len(self.almost_inference_nets)
     self.dim_z = self.prior_z.size(1)
 
-    self.mu_layers = Variable(
-      (
-        2.0 / (math.sqrt(self.net_output_dim) + math.sqrt(self.dim_z)) *
-        torch.randn(self.num_groups, self.net_output_dim, self.dim_z)
-      ),
-      requires_grad=True
+    init_mu_layers = (
+      2.0 / (math.sqrt(self.net_output_dim) + math.sqrt(self.dim_z)) *
+      torch.randn(self.num_groups, self.net_output_dim, self.dim_z)
     )
-    self.precision_layers = Variable(
-      (
-        2.0 / (math.sqrt(self.net_output_dim) + math.sqrt(self.dim_z)) *
-        torch.randn(self.num_groups, self.net_output_dim, self.dim_z)
-      ),
-      requires_grad=True
+    init_precision_layers = (
+      2.0 / (math.sqrt(self.net_output_dim) + math.sqrt(self.dim_z)) *
+      torch.randn(self.num_groups, self.net_output_dim, self.dim_z)
     )
+    init_baseline_precision = self.initial_baseline_precision * torch.ones(1)
+
+    if self.use_gpu:
+      init_mu_layers = init_mu_layers.cuda()
+      init_precision_layers = init_precision_layers.cuda()
+      init_baseline_precision = init_baseline_precision.cuda()
+
+    self.mu_layers = Variable(init_mu_layers, requires_grad=True)
+    self.precision_layers = Variable(init_precision_layers, requires_grad=True)
     self.baseline_precision = Variable(
-      self.initial_baseline_precision * torch.ones(1),
+      init_baseline_precision,
       requires_grad=True
     )
 
@@ -589,18 +594,29 @@ class FacebackInferenceNet(object):
     return Normal(mu, precision.pow(-0.5))
 
 class FacebackGenerativeNet(object):
-  def __init__(self, almost_generative_nets, net_input_dim, dim_z):
+  def __init__(
+      self,
+      almost_generative_nets,
+      net_input_dim,
+      dim_z,
+      use_gpu=False
+  ):
     self.almost_generative_nets = almost_generative_nets
     self.net_input_dim = net_input_dim
     self.dim_z = dim_z
+    self.use_gpu = use_gpu
 
     self.num_groups = len(self.almost_generative_nets)
 
+    init_connectivity_matrices = (
+      2.0 / (math.sqrt(self.dim_z) + math.sqrt(self.net_input_dim)) *
+      torch.randn(self.num_groups, self.dim_z, self.net_input_dim)
+    )
+    if self.use_gpu:
+      init_connectivity_matrices = init_connectivity_matrices.cuda()
+
     self.connectivity_matrices = Variable(
-      (
-        2.0 / (math.sqrt(self.dim_z) + math.sqrt(self.net_input_dim)) *
-        torch.randn(self.num_groups, self.dim_z, self.net_input_dim)
-      ),
+      init_connectivity_matrices,
       requires_grad=True
     )
 
@@ -681,7 +697,7 @@ class FacebackVAE(object):
     batch_size = Xs[0].size(0)
 
     # List of [batch_size * mc_samples, dim_group_x]
-    Xsrep = [Variable(X.data.repeat(mc_samples, 1)) for X in Xs]
+    Xsrep = [Variable(torch.cat([X.data] * mc_samples, dim=0)) for X in Xs]
     group_likelihoods = self.generative_net(z_sample)
 
     # Evaluating the log likelihood always happens on all available data. Sum
@@ -691,7 +707,8 @@ class FacebackVAE(object):
       # mask based on whether or not this group is present in each batch
       # item.
       torch.sum(
-        torch.sum(lik.logprob_independent(X), dim=1) * group_mask[:, ix]
+        # We add this view in case the data have more dimensions, eg images.
+        torch.sum(lik.logprob_independent(X).view(batch_size, -1), dim=1) * group_mask[:, ix]
       )
       for ix, (lik, X) in enumerate(zip(group_likelihoods, Xsrep))
     ) / mc_samples / batch_size
@@ -712,7 +729,7 @@ class FacebackVAE(object):
 
     Returns
     =======
-    list of Variables of shape [batch_size, dim_x] where dim_x can vary.
+    list of Distributions of shape [batch_size, dim_x] where dim_x can vary.
     """
     q_z = self.inference_net(Xs, inference_group_mask)
     z_sample = q_z.sample()

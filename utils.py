@@ -1,6 +1,7 @@
 # import itertools
 # import random
 import torch
+import numpy as np
 import matplotlib.pyplot as plt
 
 def no_ticks(ax):
@@ -24,15 +25,28 @@ def no_ticks(ax):
 def sample_random_mask(rows, cols, prob):
   return (torch.rand(rows, cols) < prob).float()
 
-def viz_sparsity(vae):
+def viz_sparsity(vae, group_names=None):
   """Visualize the sparisty matrix associating latent components with groups.
   Columns are normalized to have norm 1."""
   fig, ax = plt.subplots()
-  mat = vae.sparsity_matrix().data
+  mat = vae.sparsity_matrix().data.cpu()
   ax.imshow((mat / torch.max(mat, dim=0)[0]).numpy())
   ax.xaxis.tick_top()
-  ax.set_xlabel('dimensions of z')
-  ax.set_ylabel('group generative nets')
+
   ax.xaxis.set_label_position('top')
+  ax.set_xlabel('latent components', fontsize=20)
+  ax.set_ylabel('group generative nets', fontsize=20)
+
+  ax.xaxis.set_ticks(np.arange(mat.size(1)))
+  ax.xaxis.set_ticklabels(np.arange(1, mat.size(1) + 1))
+
+  ax.yaxis.set_ticks(np.arange(mat.size(0)))
+  if group_names is not None:
+    ax.yaxis.set_ticklabels(group_names)
+  else:
+    ax.yaxis.set_ticklabels(np.arange(1, mat.size(0) + 1))
+
+  plt.tight_layout()
+
   # plt.colorbar()
   return fig, ax

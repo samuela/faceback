@@ -156,7 +156,7 @@ class MocapSingleJointGroupsFaceback(object):
 
     if self.base_results_dir is not None:
       # https://stackoverflow.com/questions/2257441/random-string-generation-with-upper-case-letters-and-digits-in-python?utm_medium=organic&utm_source=google_rich_qa&utm_campaign=google_rich_qa
-      self.results_folder_name = 'mocap_subject7_' + ''.join(random.choice(string.ascii_uppercase + string.digits) for _ in range(16))
+      self.results_folder_name = 'mocap_subject55_' + ''.join(random.choice(string.ascii_uppercase + string.digits) for _ in range(16))
       self.results_dir = self.base_results_dir / self.results_folder_name
       self._init_results_dir()
 
@@ -179,7 +179,7 @@ class MocapSingleJointGroupsFaceback(object):
         reconstruction_log_likelihood = info['reconstruction_log_likelihood']
         logprob_theta = info['logprob_theta']
         logprob_L1 = info['logprob_L1']
-        test_ll = self.test_loglik().data[0]
+        # test_ll = self.test_loglik().data[0]
 
         self.optimizer.zero_grad()
         loss.backward()
@@ -187,17 +187,17 @@ class MocapSingleJointGroupsFaceback(object):
         self.vae.proximal_step(self.sparsity_matrix_lr * self.lam)
 
         self.elbo_per_iter.append(elbo.data[0])
-        self.test_loglik_per_iter.append(test_ll)
+        # self.test_loglik_per_iter.append(test_ll)
         print(f'Epoch {self.epoch}, {batch_idx} / {len(self.train_loader)}')
         print(f'  ELBO: {elbo.data[0]}')
         print(f'    -KL(q(z) || p(z)): {-z_kl.data[0]}')
         print(f'    loglik_term      : {reconstruction_log_likelihood.data[0]}')
         print(f'    log p(theta)     : {logprob_theta.data[0]}')
         print(f'    L1               : {logprob_L1.data[0]}')
-        print(f'  test log lik.      : {test_ll}', flush=True)
+        # print(f'  test log lik.      : {test_ll}', flush=True)
 
-      # Checkpoint every 10 epochs
-      if self.epoch % 10 == 0:
+      # Checkpoint every once in a while
+      if self.epoch % 50 == 0:
         self.checkpoint()
 
     # Checkpoint at the very end as well
@@ -404,13 +404,13 @@ def run_experiment(lam, group_available_prob, dim_z):
 
   # Subject 7 trial 12 is a faster walk so it's a bit different, best to ignore.
   experiment = MocapSingleJointGroupsFaceback(
-    # subject=55,
-    # train_trials=list(range(1, 25 + 1)),
-    # test_trials=[26, 27, 28],
+    subject=55,
+    train_trials=list(range(1, 25 + 1)),
+    test_trials=[26, 27, 28],
 
-    subject=7,
-    train_trials=[1, 2, 3, 4, 5, 6, 7, 8, 9, 10],
-    test_trials=[11],
+    # subject=7,
+    # train_trials=[1, 2, 3, 4, 5, 6, 7, 8, 9, 10],
+    # test_trials=[11],
 
     dim_z=dim_z,
     batch_size=64,
@@ -429,7 +429,7 @@ def run_experiment(lam, group_available_prob, dim_z):
   with open(stdout_path, 'w') as stdout, open(stderr_path, 'w') as stderr:
     sys.stdout = stdout
     sys.stderr = stderr
-    experiment.train(100)
+    experiment.train(1000)
 
   # Reset sys.stdout and sys.stderr outside of the with in case anything goes
   # wrong
@@ -437,12 +437,12 @@ def run_experiment(lam, group_available_prob, dim_z):
   sys.stderr = sys.__stderr__
 
 if __name__ == '__main__':
-  lams = [0.1, 1]
-  group_available_probs = [0.5]
+  lams = [0, 0.1, 1]
+  group_available_probs = [0.5, 1]
   dim_zs = [16]
 
   # Pool will by default use as many processes as `os.cpu_count()` indicates.
-  with multiprocessing.Pool(processes=2) as pool:
+  with multiprocessing.Pool(processes=7) as pool:
     pool.starmap(
       run_experiment,
       itertools.product(lams, group_available_probs, dim_zs)

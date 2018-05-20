@@ -22,7 +22,7 @@ from kindling.distributions import (BernoulliNet, Normal,
                                     Normal_MeanPrecisionNet, NormalNet)
 from kindling.utils import (Lambda, MetaOptimizer, NoPriorTheta,
                             NormalPriorTheta)
-from utils import no_ticks, sample_random_mask
+from utils import no_ticks, sample_random_mask, viz_sparsity
 
 # import dill
 
@@ -62,7 +62,8 @@ class BarsQuadrantsFaceback(object):
       group_available_prob,
       initial_sigma_adjustment,
       prior_theta_sigma,
-      base_results_dir=None
+      base_results_dir=None,
+      prefix='quad_bars_'
   ):
     self.img_size = img_size
     self.num_samples = num_samples
@@ -78,6 +79,7 @@ class BarsQuadrantsFaceback(object):
     self.initial_sigma_adjustment = initial_sigma_adjustment
     self.prior_theta_sigma = prior_theta_sigma
     self.base_results_dir = base_results_dir
+    self.prefix = prefix
 
     # Sample the training data and set up a DataLoader
     self.train_data = self.sample_data(self.num_samples)
@@ -149,7 +151,7 @@ class BarsQuadrantsFaceback(object):
 
     if self.base_results_dir is not None:
       # https://stackoverflow.com/questions/2257441/random-string-generation-with-upper-case-letters-and-digits-in-python?utm_medium=organic&utm_source=google_rich_qa&utm_campaign=google_rich_qa
-      self.results_folder_name = 'quadbars' + ''.join(random.choice(string.ascii_uppercase + string.digits) for _ in range(16))
+      self.results_folder_name = self.prefix + ''.join(random.choice(string.ascii_uppercase + string.digits) for _ in range(16))
       self.results_dir = self.base_results_dir / self.results_folder_name
       self._init_results_dir()
 
@@ -190,8 +192,8 @@ class BarsQuadrantsFaceback(object):
         info = self.vae.elbo(
           Xs=[Variable(x) for x in self.data_transform(data)],
           group_mask=Variable(
-            # torch.ones(actual_batch_size, self.img_size)
-            mask
+            torch.ones(actual_batch_size, self.img_size)
+            # mask
           ),
           inference_group_mask=Variable(
             # sample_random_mask(actual_batch_size * self., self.img_size, self.group_available_prob)
@@ -244,56 +246,6 @@ class BarsQuadrantsFaceback(object):
     plt.ylabel('ELBO')
     return fig
 
-  def viz_sparsity(self):
-    """Visualize the sparisty matrix associating latent components with
-    groups."""
-    fig = plt.figure()
-    plt.imshow(self.vae.sparsity_matrix().data.numpy())
-    plt.colorbar()
-    plt.xlabel('latent components')
-    plt.ylabel('groups')
-    return fig
-
-  def viz_reconstruction(self, plot_seed):
-    pytorch_rng_state = torch.get_rng_state()
-    torch.manual_seed(plot_seed)
-
-    # grab random sample from train_loader
-    train_sample, _ = iter(self.train_loader).next()
-    inference_group_mask = sample_random_mask(self.batch_size, 4, 0.5)
-    # inference_group_mask = torch.ones(self.batch_size, self.img_size)
-
-    info = self.vae.reconstruct(
-      [Variable(x) for x in self.data_transform(train_sample)],
-      Variable(inference_group_mask)
-    )
-    reconstr = info['reconstructed']
-    reconstr_untransformed = self.data_untransform([r.mu.data for r in reconstr])
-
-    fig, ax = plt.subplots(3, 8, figsize=(12, 4))
-    for i in range(8):
-      ax[0, i].imshow(train_sample[i].numpy(), vmin=0, vmax=1)
-      mask = np.kron(
-        np.maximum(inference_group_mask[i].view(2, 2).numpy(), 0.1),
-        np.ones((self.img_size // 2, self.img_size // 2))
-      )
-      ax[1, i].imshow(mask * train_sample[i].numpy(), vmin=0, vmax=1)
-      ax[2, i].imshow(reconstr_untransformed[i].numpy(), vmin=0, vmax=1)
-
-      no_ticks(ax[0, i])
-      no_ticks(ax[1, i])
-      no_ticks(ax[2, i])
-
-    ax[0, 0].set_ylabel('true')
-    ax[1, 0].set_ylabel('available')
-    ax[2, 0].set_ylabel('reconstructed')
-
-    plt.tight_layout()
-    plt.suptitle(f'Epoch {self.epoch}')
-
-    torch.set_rng_state(pytorch_rng_state)
-    return fig
-
   def _init_results_dir(self):
     self.results_dir_params = self.results_dir / 'params.json'
     self.results_dir_elbo = self.results_dir / 'elbo_plot'
@@ -317,7 +269,7 @@ class BarsQuadrantsFaceback(object):
 
   def checkpoint(self):
     if self.base_results_dir is not None:
-      fig = self.viz_reconstruction(12345)
+      fig = viz_reconstruction(self, 12345)
       plt.savefig(self.results_dir_reconstructions / f'epoch{self.epoch}.pdf')
       plt.close(fig)
 
@@ -325,15 +277,15 @@ class BarsQuadrantsFaceback(object):
       plt.savefig(self.results_dir_elbo / f'epoch{self.epoch}.pdf')
       plt.close(fig)
 
-      fig = self.viz_sparsity()
+      fig, ax = viz_sparsity(self.vae, group_names=['top left', 'top right', 'bottom left', 'bottom right'])
       plt.savefig(self.results_dir_sparsity_matrix / f'epoch{self.epoch}.pdf')
       plt.close(fig)
 
       # dill.dump(self, open(self.results_dir_pickles / f'epoch{self.epoch}.p', 'wb'))
     else:
-      self.viz_reconstruction(12345)
+      viz_reconstruction(self, 12345)
       self.viz_elbo()
-      self.viz_sparsity()
+      viz_sparsity(self.vae, group_names=['top left', 'top right', 'bottom left', 'bottom right'])
       plt.show()
 
   def data_transform(self, x):
@@ -352,23 +304,72 @@ class BarsQuadrantsFaceback(object):
       torch.cat([reshaped[2], reshaped[3]], dim=2),
     ], dim=1)
 
+def viz_reconstruction(experiment, plot_seed):
+  pytorch_rng_state = torch.get_rng_state()
+  torch.manual_seed(plot_seed)
+
+  # grab random sample from train_loader
+  train_sample, _ = iter(experiment.train_loader).next()
+  # inference_group_mask = sample_random_mask(experiment.batch_size, 4, 0.5)
+  # inference_group_mask = torch.ones(experiment.batch_size, experiment.img_size)
+
+  # infer with the left quadrants
+  inference_group_mask = torch.FloatTensor([[1, 0, 1, 0]]).expand(experiment.batch_size, -1)
+
+  info = experiment.vae.reconstruct(
+    [Variable(x) for x in experiment.data_transform(train_sample)],
+    Variable(inference_group_mask)
+  )
+  reconstr = info['reconstructed']
+  reconstr_mu_untransformed = experiment.data_untransform([r.mu.data for r in reconstr])
+  reconstr_sample_untransformed = experiment.data_untransform([r.sample().data for r in reconstr])
+
+  fig, ax = plt.subplots(4, 8, figsize=(12, 6))
+  for i in range(8):
+    ax[0, i].imshow(train_sample[i].numpy(), vmin=0, vmax=1)
+    mask = np.kron(
+      np.maximum(inference_group_mask[i].view(2, 2).numpy(), 0.1),
+      np.ones((experiment.img_size // 2, experiment.img_size // 2))
+    )
+    ax[1, i].imshow(mask * train_sample[i].numpy(), vmin=0, vmax=1)
+    ax[2, i].imshow(reconstr_mu_untransformed[i].numpy(), vmin=0, vmax=1)
+    ax[3, i].imshow(reconstr_sample_untransformed[i].numpy(), vmin=0, vmax=1)
+
+    no_ticks(ax[0, i])
+    no_ticks(ax[1, i])
+    no_ticks(ax[2, i])
+    no_ticks(ax[3, i])
+
+  ax[0, 0].set_ylabel('true')
+  ax[1, 0].set_ylabel('available')
+  ax[2, 0].set_ylabel('reconst. mean')
+  ax[3, 0].set_ylabel('reconst. sample')
+
+  # plt.suptitle(f'Epoch {experiment.epoch}')
+  plt.tight_layout()
+
+  torch.set_rng_state(pytorch_rng_state)
+  return fig
+
 if __name__ == '__main__':
   torch.manual_seed(0)
 
   experiment = BarsQuadrantsFaceback(
-    img_size=8,
+    img_size=4,
     num_samples=10000,
-    batch_size=64,
-    dim_z=16,
-    lam=1,
+    batch_size=32,
+    dim_z=4,
+    lam=0,
     sparsity_matrix_lr=1e-4,
     initial_baseline_precision=100,
     inference_net_output_dim=8,
     generative_net_input_dim=8,
     noise_stddev=0.05,
-    group_available_prob=0.5,
+    group_available_prob=0.9,
     initial_sigma_adjustment=0,
     prior_theta_sigma=1,
-    base_results_dir=Path('results/')
+    base_results_dir=Path('results/'),
+    prefix='quad_bars_lam=0_'
   )
+  experiment.checkpoint()
   experiment.train(100)
